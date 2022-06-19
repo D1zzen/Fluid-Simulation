@@ -1,0 +1,235 @@
+#version 460 core
+
+struct Node // making the node struct
+{
+    vec4 color;
+    vec2 velocity; // velocity of the node
+    ivec2 position;
+    uint initialized; // if the nodes data is initialized
+    float density; // density of the node
+    float p;
+    float dummy;
+};
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(rgba32f, binding = 0) uniform image2D tex2D; // the output and input of the texture
+
+layout(location = 11) uniform int _Precision = 10; // input iteration number for persicion
+layout(location = 10) uniform float _Time; // input time variable
+layout(location = 9) uniform vec2 _MousePos = vec2(0); // input of mouse
+layout(location = 8) uniform bool _RightMouseClick = false; // input right click of mouse
+layout(location = 7) uniform int _MouseState = 0; // input left click of mouse
+layout(location = 6) uniform vec2 _DeltaMousePos = vec2(0); // input delta of mouse
+layout(location = 5) uniform int _PaintSize = 1;
+layout(location = 4) uniform float _PaintStrength = 1;
+layout(location = 3) uniform vec3 _PaintColor = vec3(0);
+uniform vec3 _BgColor = vec3(0);
+
+const int _SimRes = 4; // input delta of mouse
+const uvec2 gridSize = uvec2(1024, 768).xy / _SimRes; // the max size of the window
+const uint gridLength = gridSize.x * gridSize.y;
+
+// code above is equals to 128 * 96 = 12288 nodes for each buffer
+layout(std430, binding = 3) buffer _GridWriteBuffer
+{
+    writeonly Node _GridWrite[gridLength]; // creating the grid
+};
+
+layout(std430, binding = 2) buffer _GridReadBuffer
+{
+    readonly Node _GridRead[gridLength]; // creating the grid
+};
+//
+// node get and set
+//
+Node GetNode(int x, int y) // get the node with coordsInGrid
+{
+    uint index = uint(x + y * gridSize.x);
+    return _GridRead[index];
+}
+void SetNode(Node node) // set the nodes value
+{
+    // boundries - needs rework
+    if(node.position.x >= gridSize.x - 5 || node.position.x <= 1) 
+    {
+        node.velocity += vec2(-node.velocity.x, 0);
+    }
+    if(node.position.y >= gridSize.y - 5 || node.position.y <= 1)
+    {
+        node.velocity += vec2(0, -node.velocity.y);
+    }
+    uint index = uint(node.position.x + gridSize.x * node.position.y);
+    _GridWrite[index] = node;
+}
+
+//
+// solving algorithms
+//
+
+// gauss seidel method
+
+float Diffuse(float currentValues[5])
+{
+    float d[5];
+    float deltaNextD[5] = {0, 0, 0, 0, 0}; // surrounding densities - in the format of {dn(x,y), dn(x+1,y), dn(x-1,y), dn(x,y+1), dn(x,y-1)}
+    for(int it = 0; it < _Precision; it++) // iterations
+    {
+        for(int i = 0; i < deltaNextD.length(); i++)
+        {
+            deltaNextD[i] = _Time * ( (deltaNextD[0] + deltaNextD[1] + deltaNextD[2] + deltaNextD[3] + 
+                                            deltaNextD[4] - deltaNextD[i]) / 4 );
+        }
+    }
+    for(int i = 0; i < d.length(); i++)
+    {
+        d[i] = (currentValues[i] + deltaNextD[i]) / (1 + _Time);
+    }
+    return d[0];
+}
+
+// lerping attributes with velocity
+
+float AdvectDensity(Node node)
+{
+    vec2 f = node.position.xy - node.velocity.xy * _Time;
+    ivec2 i = ivec2(floor(f));
+    vec2 j = fract(f);
+    float z1 = mix(GetNode(i.x, i.y).density, GetNode(i.x + 1, i.y).density, j.x);
+    float z2 = mix(GetNode(i.x, i.y + 1).density, GetNode(i.x + 1, i.y + 1).density, j.x);
+    return mix(z1, z2, j.y);
+}
+
+vec2 AdvectVelocity(Node node)
+{
+    vec2 f = node.position.xy - node.velocity.xy * _Time;
+    ivec2 i = ivec2(floor(f));
+    vec2 j = fract(f);
+    vec2 z1 = mix(GetNode(i.x, i.y).velocity, GetNode(i.x + 1, i.y).velocity, j.x);
+    vec2 z2 = mix(GetNode(i.x, i.y + 1).velocity, GetNode(i.x + 1, i.y + 1).velocity, j.x);
+    return mix(z1, z2, j.y);
+}
+
+vec4 AdvectColor(Node node)
+{
+    vec2 f = node.position.xy - node.velocity.xy * _Time;
+    ivec2 i = ivec2(floor(f));
+    vec2 j = fract(f);
+    vec4 z1 = mix(GetNode(i.x, i.y).color, GetNode(i.x + 1, i.y).color, j.x);
+    vec4 z2 = mix(GetNode(i.x, i.y + 1).color, GetNode(i.x + 1, i.y + 1).color, j.x);
+    return mix(z1, z2, j.y);
+}
+
+// vector almost equals
+
+bool Vec2Almost(vec2 a, vec2 b, float SimilarityDelta)
+{
+    return length(a - b) < SimilarityDelta;
+}
+
+// Hodge decomposition
+
+vec2 Project(Node node) 
+{
+    float p[5] = { node.p, 0, 0, 0, 0};
+    float deltaVel = ( GetNode(node.position.x + 1, node.position.y).velocity.x - GetNode(node.position.x - 1, node.position.y).velocity.x +
+                                GetNode(node.position.x, node.position.y + 1).velocity.y - GetNode(node.position.x, node.position.y - 1).velocity.y) / 2;
+    for(int it = 0; it < _Precision; it++)
+    {
+        for(int i = 0; i < p.length(); i++)
+        {
+            p[i] = ((p[0] + p[1] + p[2] + p[3] + p[4] - p[i]) - deltaVel) / 4;
+        }
+    }
+    node.p = p[0];
+    SetNode(node);
+    float x = node.velocity.x - ((p[1] - p[2]) / 2);
+    float y = node.velocity.y - ((p[3] - p[4]) / 2);
+    return vec2(x, y);
+}
+
+//
+// fluid interaction
+//
+void main() // the main function that runs foreach invocation
+{
+	ivec2 pixelCoords = ivec2(gl_GlobalInvocationID.xy); // getting the current invocation id - (x, y)
+
+    Node currentNode = GetNode(pixelCoords.x, pixelCoords.y); // get the current node of the pixel coords
+    if(currentNode.initialized <= 0)
+    {
+        // initialize the pixels node
+        currentNode.density = 0.5;
+        currentNode.velocity = vec2(0.1);
+        currentNode.position = pixelCoords;
+        currentNode.initialized = 1;
+        currentNode.color = vec4(_BgColor, 1.0);
+
+        SetNode(currentNode);
+        vec4 color = vec4(currentNode.color * currentNode.density);
+	    imageStore(tex2D, pixelCoords, color); // setting the color at the pixel position for the texture
+        
+        return;
+    }
+
+    // simulate
+    float densities[5] = {currentNode.density, 0, 0, 0, 0}; // in the format of {dn(x,y), dn(x+1,y), dn(x-1,y), dn(x,y+1), dn(x,y-1)}
+    float velocitiesX[5] = {currentNode.velocity.x, 0, 0, 0, 0};
+    float velocitiesY[5] = {currentNode.velocity.y, 0, 0, 0, 0};
+
+    float colorR[5] = {currentNode.color.x, 0, 0, 0, 0};
+    float colorG[5] = {currentNode.color.y, 0, 0, 0, 0};
+    float colorB[5] = {currentNode.color.z, 0, 0, 0, 0};
+
+    Node nodes[5]; // in the format of {n(x, y), n(x+1,y), n(x-1,y), n(x,y+1), n(x,y-1)}
+    nodes[0] = currentNode;
+    nodes[1] = GetNode(currentNode.position.x + 1, currentNode.position.y);
+    nodes[2] = GetNode(currentNode.position.x - 1, currentNode.position.y);
+    nodes[3] = GetNode(currentNode.position.x, currentNode.position.y + 1);
+    nodes[4] = GetNode(currentNode.position.x, currentNode.position.y - 1);
+
+    for(int i = 1; i < nodes.length(); i++)
+    {
+        densities[i] = nodes[i].density;
+        velocitiesX[i] = nodes[i].velocity.x;
+        velocitiesY[i] = nodes[i].velocity.y;
+
+        colorR[i] = nodes[i].color.x;
+        colorG[i] = nodes[i].color.y;
+        colorB[i] = nodes[i].color.z;
+    }
+
+    currentNode.velocity = vec2(Diffuse(velocitiesX), Diffuse(velocitiesY));
+    currentNode.velocity = AdvectVelocity(currentNode);
+    currentNode.velocity = Project(currentNode);
+
+    currentNode.density = Diffuse(densities);
+    currentNode.density = AdvectDensity(currentNode);
+
+    currentNode.color = vec4(Diffuse(colorR), Diffuse(colorG), Diffuse(colorB), 1.0);
+    currentNode.color = AdvectColor(currentNode);
+
+    // inputs
+
+    if(_RightMouseClick && Vec2Almost(ceil(_MousePos / 4), pixelCoords, _PaintSize))
+    {
+        if(_MouseState == 0)
+        {
+            currentNode.density += _PaintStrength;
+        }
+        else if(_MouseState == 1 && _DeltaMousePos.xy != _MousePos.xy)
+        {
+            vec2 dir = _MousePos - _DeltaMousePos;
+            currentNode.velocity += dir * _PaintStrength;
+        }
+        else if(_MouseState == 2) 
+        {
+            currentNode.color += vec4(_PaintColor * _PaintStrength, 1.0);
+        }
+    }
+
+    SetNode(currentNode);
+    
+    vec4 color = vec4(currentNode.color * currentNode.density);
+	imageStore(tex2D, pixelCoords, color); // setting the color at the pixel position for the texture
+    
+}

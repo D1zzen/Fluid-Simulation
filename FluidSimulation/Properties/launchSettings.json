@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "FluidSimulation": {
+      "commandName": "Project",
+      "nativeDebugging": true
+    }
+  }
+}
