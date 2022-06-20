@@ -4,4 +4,5 @@
  
  Used resources:
 - https://www.autodesk.com/research/publications/real-time-fluid-dynamics | Explanation behind real time fluid simulation by **Jos Stam**
-- [https://opentk.net/learn/chapter1/index.html](https://opentk.net/learn/chapter1/index.html) | Documentation of OpenTK, basic implementation of OpenTK
+- https://opentk.net/learn/chapter1/index.html | Documentation of OpenTK, basic implementation of OpenTK
+- https://www.khronos.org/opengl/wiki/Main_Page | Documentation of OpenGL
